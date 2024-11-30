@@ -49,6 +49,31 @@ volatile eState_t curState = eNone;
 volatile eState_t lastState = eNone;
 volatile bool lanChange = false;
 
+uint8_t readACK(){
+    uint8_t data = 0;
+    readBytes(data, 1);
+    return data;
+    
+}
+
+void wait(){
+//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
+    while (readACK() != 0x41)
+    {
+        
+    }
+    
+    _delay_ms(100);
+    
+    while (1)
+    {
+      uint8_t check[4] = { 0xFD,0x00,0x01,0x21 };
+      write(check, 4);
+      if (readACK() == 0x4f) break;
+      _delay_ms(20);
+    }
+}
+
 void startTWIr(){
     TWI0.MADDR = (SPEECH_ADDRESS << 1) | 1;
     
@@ -374,30 +399,7 @@ void speak(char* word){
     
 }
 
-uint8_t readACK(){
-    uint8_t data = 0;
-    readBytes(data, 1);
-    return data;
-    
-}
 
-void wait(){
-//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    while (readACK() != 0x41)
-    {
-        
-    }
-    
-    _delay_ms(100);
-    
-    while (1)
-    {
-      uint8_t check[4] = { 0xFD,0x00,0x01,0x21 };
-      write(check, 4);
-      if (readACK() == 0x4f) break;
-      _delay_ms(20);
-    }
-}
 
 
 
