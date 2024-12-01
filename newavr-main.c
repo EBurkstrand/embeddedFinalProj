@@ -31,7 +31,11 @@
 #define PAUSE_SYNTHESIS        0x03  //pause speech synthesis command
 #define RECOVER_SYNTHESIS      0x04  //Resume speech synthesis commands
 
+#define F_SCL 100000UL
+#define TWI_BAUD(F_SCL) ((F_CPU / (2 * F_SCL)) - 5)
+
 uint16_t getWordLen(uint8_t *_utf8);
+void begin();
 
 typedef enum{
    eAlphabet,/**<Spell>*/
@@ -44,14 +48,35 @@ typedef enum{
     eNone,
   } eState_t;
 
-volatile uint16_t gLength;
+volatile uint16_t gLength = 0;
 volatile eState_t curState = eNone;
 volatile eState_t lastState = eNone;
 volatile bool lanChange = false;
 
+void initTWI() {
+    // TODO Set up TWI Peripheral
+    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
+//    PORTA.DIRCLR = PIN2_bm | PIN3_bm;
+    
+    PORTA.PIN2CTRL = PORT_PULLUPEN_bm;
+    PORTA.PIN3CTRL = PORT_PULLUPEN_bm;
+    
+    TWI0.CTRLA = TWI_SDAHOLD_50NS_gc;
+    
+    TWI0.MSTATUS = TWI_RIF_bm | TWI_WIF_bm | TWI_CLKHOLD_bm | TWI_RXACK_bm |
+            TWI_ARBLOST_bm | TWI_BUSERR_bm | TWI_BUSSTATE_IDLE_gc;
+    
+//    TWI0.MSTATUS = TWI_BUSSTATE_IDLE_gc;
+    
+    TWI0.MBAUD = 10;
+
+    TWI0.MCTRLA = (uint8_t)TWI_BAUD(F_SCL);
+
+}
+
 uint8_t readACK(){
     uint8_t data = 0;
-    readBytes(data, 1);
+    readBytes(&data, 1);
     return data;
     
 }
@@ -68,56 +93,35 @@ void wait(){
     while (1)
     {
       uint8_t check[4] = { 0xFD,0x00,0x01,0x21 };
-      write(check, 4);
+      writeBytes(check, 4);
       if (readACK() == 0x4f) break;
       _delay_ms(20);
     }
 }
 
-void startTWIr(){
-    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 1;
-    
-//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    wait();
-    TWI0.MCTRLB = TWI_MCMD_REPSTART_gc;
-}
+
 
 void write(uint8_t* data, uint16_t length){
     uint8_t count = 0;
     while(count < length){
         TWI0.MDATA = data[count];
-//        while (!(TWI0.MSTATUS & TWI_WIF_bm));
-        wait();
+        while (!(TWI0.MSTATUS & TWI_WIF_bm));
+        if(TWI0.MSTATUS & TWI_RXACK_bm){
+            return;
+        }
         count++;
     }
 }
 
-void initTWI() {
-    // TODO Set up TWI Peripheral
-    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
-    
-    PORTA.PIN2CTRL = PORT_PULLUPEN_bm;
-    PORTA.PIN3CTRL = PORT_PULLUPEN_bm;
-    
-    TWI0.CTRLA = TWI_SDAHOLD_50NS_gc;
-    
-    TWI0.MSTATUS = TWI_RIF_bm | TWI_WIF_bm | TWI_CLKHOLD_bm | TWI_RXACK_bm |
-            TWI_ARBLOST_bm | TWI_BUSERR_bm | TWI_BUSSTATE_IDLE_gc;
-    
-    TWI0.MBAUD = 10;
 
-    TWI0.MCTRLA = TWI_ENABLE_bm;
-
-}
 
 void begin() {
-    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 0;
-    
+//    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 0;
+//    
 //    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    wait();
     
     uint8_t init = 0xAA;
-    writeBytes(init, 1);
+    writeBytes(&init, 1);
     
      _delay_ms(100);
     
@@ -130,10 +134,8 @@ void begin() {
 void startTWIw(){
     TWI0.MADDR = (SPEECH_ADDRESS << 1) | 0;
     
-//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    wait();
+    while (!(TWI0.MSTATUS & TWI_WIF_bm));
     
-    TWI0.MCTRLB = TWI_MCMD_REPSTART_gc;
 }
 
 
@@ -155,8 +157,8 @@ void read(uint8_t* data, uint8_t len){
     while (bCount < len)
     {
         //Wait...
-//        while (!(TWI0.MSTATUS & TWI_RIF_bm));
-        wait();
+        while (!(TWI0.MSTATUS & TWI_RIF_bm));
+        
         
         //Store data
         data[bCount] = TWI0.MDATA;
@@ -176,13 +178,19 @@ void read(uint8_t* data, uint8_t len){
     
 }
 
+void startTWIr(){
+    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 1;
+    
+    while (!(TWI0.MSTATUS & TWI_RIF_bm));
+}
+
 void readBytes(uint8_t* data, uint8_t len){
     startTWIr();
     read(data, len);
 }
 
 void setVol(uint8_t vol){
-    char* str = "[v3]";
+    char str[4] = "[v3]";
     if(vol > 9){
         vol = 9;
     }
@@ -191,14 +199,14 @@ void setVol(uint8_t vol){
 }
 
 void setSpeed(uint8_t speed){
-    char* str = "[s5]";
+    char str[4] = "[s5]";
     if (speed > 9) speed = 9;
     str[2] = 48 + speed;
     speakElish(str);
 }
 
 void setTone(uint8_t tone){
-    char* str = "[t5]";
+    char str[4] = "[t5]";
     if (tone > 9) tone = 9;
     str[2] = 48 + tone;
     speakElish(str);
@@ -264,10 +272,9 @@ void sendPack(uint8_t cmd, uint8_t* data, uint16_t len){
 
 void sendCommand(uint8_t* head, uint8_t* data, uint16_t length){
     uint16_t lenTemp = 0;
-    startTWIw();
+    
     writeBytes(head, 5);
 
-    startTWIw();
     writeBytes(data, length);
 }
 
@@ -287,6 +294,7 @@ void speak(char* word){
       len++;
     }
     gLength = len;
+    _len = len;
     uint8_t _utf8[len];
     for (uint32_t i = 0;i <= len;i++) {
         _utf8[i] = word[i];
@@ -395,8 +403,21 @@ void speak(char* word){
           point = 0;
           lanChange = false;
         }
-      }
-    
+    }
+    if (lastState == eChinese) {
+        sendPack(START_SYNTHESIS, _unicode, point);
+        wait();
+    } else if (lastState == eEnglish) {
+        sendPack(START_SYNTHESIS1, _unicode, point);
+        wait();
+    }
+    lastState = eNone;
+    curState = eNone;
+    point = 0;
+    lanChange = false;
+
+    _index = 0;
+    _len = 0;
 }
 
 
