@@ -1,12 +1,6 @@
-/*
- * File:   newavr-main.c
- * Author: evanb
- *
- * Created on November 29, 2024, 8:04 PM
- */
 
 #ifndef F_CPU
-#define F_CPU 3333333
+#define F_CPU 3333333UL
 #endif
 
 #include <avr/io.h>
@@ -34,9 +28,6 @@
 #define F_SCL 100000UL
 #define TWI_BAUD(F_SCL) ((F_CPU / (2 * F_SCL)) - 5)
 
-uint16_t getWordLen(uint8_t *_utf8);
-void begin();
-
 typedef enum{
    eAlphabet,/**<Spell>*/
    eWord,/**<word>*/
@@ -53,24 +44,47 @@ volatile eState_t curState = eNone;
 volatile eState_t lastState = eNone;
 volatile bool lanChange = false;
 
+uint16_t getWordLen(uint8_t *_utf8);
+void begin();
+void startTWIw();
+void writeBytes(uint8_t* data, uint16_t length);
+void read(uint8_t* data, uint8_t len);
+void write(uint8_t* data, uint16_t length);
+void startTWIr();
+void readBytes(uint8_t* data, uint8_t len);
+void setVol(uint8_t vol);
+void setSpeed(uint8_t speed);
+void setTone(uint8_t tone);
+void setEnglishPron(eENpron_t pron);
+void speakElish(char* str);
+void sendPack(uint8_t cmd, uint8_t* data, uint16_t len);
+void sendCommand(uint8_t* head, uint8_t* data, uint16_t length);
+void speak(char* word);
+uint16_t getWordLen(uint8_t *_utf8);
+void setup();
+
+#define EXPECTED_ACK_VALUE 0x41
+
+
+
 void initTWI() {
     // TODO Set up TWI Peripheral
-    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
-//    PORTA.DIRCLR = PIN2_bm | PIN3_bm;
+//    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
+    PORTA.DIRCLR = PIN2_bm | PIN3_bm;
     
     PORTA.PIN2CTRL = PORT_PULLUPEN_bm;
     PORTA.PIN3CTRL = PORT_PULLUPEN_bm;
     
     TWI0.CTRLA = TWI_SDAHOLD_50NS_gc;
     
-    TWI0.MSTATUS = TWI_RIF_bm | TWI_WIF_bm | TWI_CLKHOLD_bm | TWI_RXACK_bm |
-            TWI_ARBLOST_bm | TWI_BUSERR_bm | TWI_BUSSTATE_IDLE_gc;
+//    TWI0.MSTATUS = TWI_RIF_bm | TWI_WIF_bm | TWI_CLKHOLD_bm | TWI_RXACK_bm |
+//            TWI_ARBLOST_bm | TWI_BUSERR_bm | TWI_BUSSTATE_IDLE_gc;
     
-//    TWI0.MSTATUS = TWI_BUSSTATE_IDLE_gc;
+    TWI0.MSTATUS = TWI_BUSSTATE_IDLE_gc;
     
-    TWI0.MBAUD = 10;
+    TWI0.MBAUD = (uint8_t)TWI_BAUD(F_SCL);
 
-    TWI0.MCTRLA = (uint8_t)TWI_BAUD(F_SCL);
+    TWI0.MCTRLA = TWI_ENABLE_bm;
 
 }
 
@@ -213,7 +227,7 @@ void setTone(uint8_t tone){
 }
 
 void setEnglishPron(eENpron_t pron){
-    char* str;
+    char* str = "[h2]";
     if (pron == eAlphabet) {
         str = "[h1]";
     } else if (pron == eWord) {
@@ -223,7 +237,7 @@ void setEnglishPron(eENpron_t pron){
 }
 
 void speakElish(char* str){
-    uint16_t point = 0;
+//    uint16_t point = 0;   
     uint16_t len = 0;
     while (str[len] != '\0') {
         len++;
@@ -234,6 +248,8 @@ void speakElish(char* str){
     }
     
     sendPack(START_SYNTHESIS1, unicode, len);
+    
+    //wait();)
 
 }
 
@@ -271,11 +287,15 @@ void sendPack(uint8_t cmd, uint8_t* data, uint16_t len){
 }
 
 void sendCommand(uint8_t* head, uint8_t* data, uint16_t length){
-    uint16_t lenTemp = 0;
+//    uint16_t lenTemp = 0;
     
-    writeBytes(head, 5);
+    startTWIw();
+    
+    write(head, 5);
 
-    writeBytes(data, length);
+    write(data, length);
+    
+    TWI0.MCTRLB = TWI_MCMD_STOP_gc;
 }
 
 //read = 1, write = 0
@@ -426,7 +446,7 @@ void speak(char* word){
 
 uint16_t getWordLen(uint8_t *_utf8){
     uint16_t index = 0;
-    uint32_t uni = 0;
+//    uint32_t uni = 0;
     uint16_t length = 0;
     while (index < gLength) {
     if (_utf8[index] >= 0xfc) {
@@ -484,10 +504,28 @@ void setup() {
 int main(void) {
     /* Replace with your application code */
     initTWI();
-    setup();
-    speak("Hello World");
-    while (1) {
-        _delay_ms(10000);
-        speak("Hello World");
+//    setup();
+//    speak("Hello World");
+//    while (1) {
+//        _delay_ms(10000);
+//        speak("Hello World");
+//    }
+    PORTA.DIR |= PIN5_bm;
+    PORTA.OUT |= PIN5_bm;
+//    startTWIw();
+    uint8_t init_cmd = 0xAA;
+    writeBytes(&init_cmd, 1);
+
+    // Check for acknowledgment
+    
+    uint8_t ack = 0; 
+    ack = readACK();
+    if (ack == EXPECTED_ACK_VALUE) {
+        // Indicate success (e.g., toggle an LED)
+        
+        PORTA.OUT &= ~PIN5_bm;
+    } else {
+        // Indicate failure
     }
+    
 }
