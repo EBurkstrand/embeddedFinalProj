@@ -65,12 +65,41 @@ void setup();
 
 #define EXPECTED_ACK_VALUE 0x41
 
+#define SAMPLES_PER_BIT 16
+#define USART2_BAUD_VALUE(BAUD_RATE) (uint16_t) ((F_CPU << 6) / (((float) SAMPLES_PER_BIT) * (BAUD_RATE)) + 0.5)
 
+void USART2_INIT(void);
+void USART2_PRINTF(char *str);
+
+void USART2_INIT(void)
+{
+    /* Set TX pin as output and RX pin as input */
+    PORTF.DIRSET = PIN0_bm;
+    PORTF.DIRCLR = PIN1_bm;
+    
+    /* Set the BAUD Rate using the macro from the tutorial
+     *      Use 9600 as the standard baud rate. You will need to match this in Putty
+     */
+    USART2.BAUD = (uint16_t)USART2_BAUD_VALUE(9600);
+    
+    /* Enable transmission for USART2 */
+    USART2.CTRLB |= USART_TXEN_bm;
+}
+
+void USART2_PRINTF(char *str)
+ {
+    for(size_t i = 0; i < strlen(str); i++)
+    {
+        while (!(USART2.STATUS & USART_DREIF_bm));      
+        USART2.TXDATAL = str[i];
+    }
+//    USART2.TXDATAL = 0x45;
+ }
 
 void initTWI() {
     // TODO Set up TWI Peripheral
 //    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
-    PORTA.DIRCLR = PIN2_bm | PIN3_bm;
+    PORTA.DIRSET = PIN2_bm | PIN3_bm;
     
     PORTA.PIN2CTRL = PORT_PULLUPEN_bm;
     PORTA.PIN3CTRL = PORT_PULLUPEN_bm;
@@ -99,11 +128,12 @@ void wait(){
 //    while (!(TWI0.MSTATUS & TWI_WIF_bm));
     while (readACK() != 0x41)
     {
-        
+        PORTA.OUT |= PIN5_bm;
     }
     
-    _delay_ms(100);
-    
+     _delay_ms(100);
+
+//    
     while (1)
     {
       uint8_t check[4] = { 0xFD,0x00,0x01,0x21 };
@@ -424,10 +454,12 @@ void speak(char* word){
           lanChange = false;
         }
     }
+
     if (lastState == eChinese) {
         sendPack(START_SYNTHESIS, _unicode, point);
         wait();
     } else if (lastState == eEnglish) {
+        PORTA.DIR |= PIN6_bm;
         sendPack(START_SYNTHESIS1, _unicode, point);
         wait();
     }
@@ -504,6 +536,9 @@ void setup() {
 int main(void) {
     /* Replace with your application code */
     initTWI();
+    USART2_INIT();
+    char* test = "test";
+    USART2_PRINTF(test);
 //    setup();
 //    speak("Hello World");
 //    while (1) {
@@ -511,19 +546,53 @@ int main(void) {
 //        speak("Hello World");
 //    }
     PORTA.DIR |= PIN5_bm;
-    PORTA.OUT |= PIN5_bm;
+    
+//    wait();
+    
+//    PORTA.OUT |= PIN5_bm;
 //    startTWIw();
-    uint8_t init_cmd = 0xAA;
-    writeBytes(&init_cmd, 1);
+//    uint8_t init_cmd = 0xAA;
+//    writeBytes(&init_cmd, 1);
+    begin();
+    _delay_ms(1000);
+//    setEnglishPron(eWord);
+//    _delay_ms(1000);
+////    setTone(5);
+    speakElish("[m1]");
+    _delay_ms(2000);
+    speakElish("[v7]");
+    _delay_ms(1000);
+    speak("module");
+//    _delay_ms(2000);
+    wait();
+    speak("hello");
+//    _delay_ms(2000);
+    wait();
+//    _delay_ms(2000);
+    speak("bopit");
+//    wait();
+//    speak("twist-it");
+//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
+//    speak("module");
+//    speak("module");
+//    speak("module");
+//    speak("module");
+//    speak("module");
+//    speak("module");
 
     // Check for acknowledgment
     
     uint8_t ack = 0; 
     ack = readACK();
+    
     if (ack == EXPECTED_ACK_VALUE) {
         // Indicate success (e.g., toggle an LED)
         
+        PORTA.OUT |= PIN5_bm;
+        _delay_ms(2000);
         PORTA.OUT &= ~PIN5_bm;
+        speak("hello");
+//        wait();
     } else {
         // Indicate failure
     }
