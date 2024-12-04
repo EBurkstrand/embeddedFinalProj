@@ -1,584 +1,317 @@
+/*
+ * File:   newavr-main.c
+ * Author: lucas
+ *
+ * Created on November 14, 2024, 12:09 AM
+ */
 
-#ifndef F_CPU
-#define F_CPU 3333333UL
-#endif
 
-#include <avr/io.h>
-#include <util/delay.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
+//#define F_CPU 3333333
 
-#define SPEECH_ADDRESS 0x40
-#define SPEECH_START_ADDRESS 0x01
+#include "speech.h"
+//#include <avr/io.h>
+#include <avr/interrupt.h>
+//#include <util/delay.h>
+//#include <stdlib.h>
+#include <avr/cpufunc.h>
+//#include "stdio.h"
+//#include "stdlib.h"
 
-#define I2C_ADDR               0x40  //i2c address
-#define INQUIRYSTATUS          0x21  //Check status
-#define ENTERSAVEELETRI        0x88   
-#define WAKEUP                 0xFF  //Wake-up command
+#define TWI_WAIT_R() while (!(TWI0.MSTATUS & TWI_RIF_bm))
+#define TWI_WAIT_W() while (!(TWI0.MSTATUS & TWI_WIF_bm))
+#define ACCELEROMETER_ADDRESS 0x19
+#define ACCELEROMETER_START_REGISTER 0x02
 
-#define START_SYNTHESIS        0x01  //Start synthesis command 0
-#define START_SYNTHESIS1       0x02  //Start synthesis command 1
-#define STOP_SYNTHESIS         0x02  //End speech synthesis
-#define PAUSE_SYNTHESIS        0x03  //pause speech synthesis command
-#define RECOVER_SYNTHESIS      0x04  //Resume speech synthesis commands
+enum States {
+    INIT = -1,
+    BOP,
+    PULL,
+    TWIST,
+    SHAKE,
+    OVER
+};
 
-#define F_SCL 100000UL
-#define TWI_BAUD(F_SCL) ((F_CPU / (2 * F_SCL)) - 5)
+volatile enum States state = INIT;
+volatile int score = 0;
+volatile int delay = 0;
 
-typedef enum{
-   eAlphabet,/**<Spell>*/
-   eWord,/**<word>*/
-  } eENpron_t;
+typedef struct {
+    register8_t *direction;
+    register8_t *output;
+    register8_t *ctrl;
+    uint8_t bit_map;
+} output_t;
 
-typedef enum{
-    eChinese,
-    eEnglish,
-    eNone,
-  } eState_t;
+output_t SDA = {
+    .direction = &PORTA.DIR,
+    .output = &PORTA.OUT,
+    .ctrl = &PORTA.PIN2CTRL,
+    .bit_map = PIN2_bm
+};
 
-volatile uint16_t gLength = 0;
-volatile eState_t curState = eNone;
-volatile eState_t lastState = eNone;
-volatile bool lanChange = false;
+output_t SCL = {
+    .direction = &PORTA.DIR,
+    .output = &PORTA.OUT,
+    .ctrl = &PORTA.PIN3CTRL,
+    .bit_map = PIN3_bm,
+};
 
-uint16_t getWordLen(uint8_t *_utf8);
-void begin();
-void startTWIw();
-void writeBytes(uint8_t* data, uint16_t length);
-void read(uint8_t* data, uint8_t len);
-void write(uint8_t* data, uint16_t length);
-void startTWIr();
-void readBytes(uint8_t* data, uint8_t len);
-void setVol(uint8_t vol);
-void setSpeed(uint8_t speed);
-void setTone(uint8_t tone);
-void setEnglishPron(eENpron_t pron);
-void speakElish(char* str);
-void sendPack(uint8_t cmd, uint8_t* data, uint16_t len);
-void sendCommand(uint8_t* head, uint8_t* data, uint16_t length);
-void speak(char* word);
-uint16_t getWordLen(uint8_t *_utf8);
-void setup();
+output_t twist = {
+    .direction = &PORTA.DIR,
+    .output = &PORTA.OUT,
+    .ctrl = &PORTA.PIN4CTRL,
+    .bit_map = PIN4_bm,
+};
 
-#define EXPECTED_ACK_VALUE 0x41
+output_t bop = {
+    .direction = &PORTA.DIR,
+    .output = &PORTA.OUT,
+    .ctrl = &PORTA.PIN5CTRL,
+    .bit_map = PIN5_bm,
+};
 
-#define SAMPLES_PER_BIT 16
-#define USART2_BAUD_VALUE(BAUD_RATE) (uint16_t) ((F_CPU << 6) / (((float) SAMPLES_PER_BIT) * (BAUD_RATE)) + 0.5)
-
-void USART2_INIT(void);
-void USART2_PRINTF(char *str);
-
-void USART2_INIT(void)
-{
-    /* Set TX pin as output and RX pin as input */
-    PORTF.DIRSET = PIN0_bm;
-    PORTF.DIRCLR = PIN1_bm;
-    
-    /* Set the BAUD Rate using the macro from the tutorial
-     *      Use 9600 as the standard baud rate. You will need to match this in Putty
-     */
-    USART2.BAUD = (uint16_t)USART2_BAUD_VALUE(9600);
-    
-    /* Enable transmission for USART2 */
-    USART2.CTRLB |= USART_TXEN_bm;
-}
-
-void USART2_PRINTF(char *str)
- {
-    for(size_t i = 0; i < strlen(str); i++)
-    {
-        while (!(USART2.STATUS & USART_DREIF_bm));      
-        USART2.TXDATAL = str[i];
-    }
-//    USART2.TXDATAL = 0x45;
- }
-
-void USART2_PRINTF2(uint8_t data[])
- {
-    uint8_t length = sizeof(data) / sizeof(data[0]);
-    
-    
-    for(size_t i = 0; i < length; i++)
-    {
-        while (!(USART2.STATUS & USART_DREIF_bm));      
-        USART2.TXDATAL = data[i];
-    }
-//    USART2.TXDATAL = 0x45;
- }
+output_t pull = {
+    .direction = &PORTA.DIR,
+    .output = &PORTA.OUT,
+    .ctrl = &PORTA.PIN6CTRL,
+    .bit_map = PIN6_bm,
+};
 
 void initTWI() {
-    // TODO Set up TWI Peripheral
-//    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
-    PORTA.DIRSET = PIN2_bm | PIN3_bm;
-    
-    PORTA.PIN2CTRL = PORT_PULLUPEN_bm;
-    PORTA.PIN3CTRL = PORT_PULLUPEN_bm;
-    
     TWI0.CTRLA = TWI_SDAHOLD_50NS_gc;
-    
-//    TWI0.MSTATUS = TWI_RIF_bm | TWI_WIF_bm | TWI_CLKHOLD_bm | TWI_RXACK_bm |
-//            TWI_ARBLOST_bm | TWI_BUSERR_bm | TWI_BUSSTATE_IDLE_gc;
-    
-    TWI0.MSTATUS = TWI_BUSSTATE_IDLE_gc;
-    
-    TWI0.MBAUD = (uint8_t)TWI_BAUD(F_SCL);
-
+    TWI0.MSTATUS = TWI_RIF_bm | TWI_WIF_bm | TWI_CLKHOLD_bm | TWI_RXACK_bm |
+                   TWI_ARBLOST_bm | TWI_BUSERR_bm | TWI_BUSSTATE_IDLE_gc;
+    TWI0.MBAUD = 10;
+    //TWI0.DBGCTRL &= ~TWI_DBGRUN_bm;
     TWI0.MCTRLA = TWI_ENABLE_bm;
-
-}
-
-uint8_t readACK(){
-    uint8_t data = 0;
-    readBytes(&data, 1);
-    return data;
     
+    *SDA.direction |= SDA.bit_map;
+    *SCL.direction |= SCL.bit_map;
+    *SDA.ctrl |= PORT_PULLUPEN_bm;
+    *SCL.ctrl |= PORT_PULLUPEN_bm;
 }
 
-void wait(){
-//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    while (readACK() != 0x41)
-    {
-        PORTA.OUT |= PIN5_bm;
+void initInputs() {
+    *twist.direction &= ~twist.bit_map;
+    *twist.ctrl |= PORT_PULLUPEN_bm | PORT_ISC_FALLING_gc;
+    *bop.direction &= ~bop.bit_map;
+    *bop.ctrl |= PORT_PULLUPEN_bm | PORT_ISC_FALLING_gc;
+    *pull.direction &= ~pull.bit_map;
+    *pull.ctrl |= PORT_PULLUPEN_bm | PORT_ISC_RISING_gc;
+}
+
+void writeTWI_speak(char *data, int len) {
+    TWI0.MADDR = 0x40;
+    TWI_WAIT_W();
+    for (int i = 0; i < len; i++) {
+        TWI0.MDATA = data[i];
+        TWI_WAIT_W();
     }
-    
-     _delay_ms(100);
-
-//    
-    while (1)
-    {
-      uint8_t check[4] = { 0xFD,0x00,0x01,0x21 };
-      writeBytes(check, 4);
-      if (readACK() == 0x4f) break;
-      _delay_ms(20);
-    }
-}
-
-
-
-void write(uint8_t* data, uint16_t length){
-    uint8_t count = 0;
-    while(count < length){
-        TWI0.MDATA = data[count];
-        while (!(TWI0.MSTATUS & TWI_WIF_bm));
-        if(TWI0.MSTATUS & TWI_RXACK_bm){
-            return;
-        }
-        count++;
-    }
-}
-
-
-
-void begin() {
-//    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 0;
-//    
-//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    
-    uint8_t init = 0xAA;
-    writeBytes(&init, 1);
-    
-     _delay_ms(100);
-    
-    uint8_t check[4] = { 0xFD,0x00,0x01,0x21 };
-    
-    writeBytes(check, 4);
-    
-}
-
-void startTWIw(){
-    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 0;
-    
-    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-    
-}
-
-
-
-void writeBytes(uint8_t* data, uint16_t length){
-    startTWIw();
-    
-    write(data, length);
-    
-    
     TWI0.MCTRLB = TWI_MCMD_STOP_gc;
-    
-    
 }
 
-void read(uint8_t* data, uint8_t len){
-    uint8_t bCount = 0;
-    TWI0.MSTATUS = TWI_CLKHOLD_bm;
-    while (bCount < len)
-    {
-        //Wait...
-        while (!(TWI0.MSTATUS & TWI_RIF_bm));
-        
-        
-        //Store data
-        data[bCount] = TWI0.MDATA;
+void writeTWI_display(char *data, int len) {
+    TWI0.MADDR = 0b11100010;
+    TWI_WAIT_W();
+    for (int i = 0; i < len; i++) {
+        TWI0.MDATA = data[i];
+        TWI_WAIT_W();
+    }
+    TWI0.MCTRLB = TWI_MCMD_STOP_gc;
+}
 
-        //Increment the counter
-        bCount += 1;
-        
-        if (bCount != len)
-        {
-            //If not done, then ACK and read the next byte
+void readTWI_accel(uint8_t *dest, uint8_t len) {
+    TWI0.MADDR = (ACCELEROMETER_ADDRESS << 1) | 0;
+    TWI_WAIT_W();
+    TWI0.MDATA = ACCELEROMETER_START_REGISTER;
+    TWI_WAIT_W();
+    TWI0.MCTRLB = TWI_MCMD_STOP_gc;
+    //Reading
+    TWI0.MADDR = (ACCELEROMETER_ADDRESS << 1) | 1;
+    TWI_WAIT_R();
+    
+    uint8_t count = 0;
+    TWI0.MSTATUS = TWI_CLKHOLD_bm;
+    
+    while (count < len) {
+        TWI_WAIT_R();
+        dest[count] = TWI0.MDATA;
+        count++;
+        if (count != len) {
             TWI0.MCTRLB = TWI_ACKACT_ACK_gc | TWI_MCMD_RECVTRANS_gc;
         }
     }
-    
-    //NACK and STOP the bus
     TWI0.MCTRLB = TWI_ACKACT_NACK_gc | TWI_MCMD_STOP_gc;
+}
+
+void RTC_init(void) {
+    uint8_t temp;
     
-}
-
-void startTWIr(){
-    TWI0.MADDR = (SPEECH_ADDRESS << 1) | 1;
+    /* Initialize 32.768kHz Oscillator: */
+    /* Disable oscillator: */
+    temp = CLKCTRL.XOSC32KCTRLA;
+    temp &= ~CLKCTRL_ENABLE_bm;
+    /* Writing to protected register */
+    ccp_write_io((void*)&CLKCTRL.XOSC32KCTRLA, temp);
     
-    while (!(TWI0.MSTATUS & TWI_RIF_bm));
-}
-
-void readBytes(uint8_t* data, uint8_t len){
-    startTWIr();
-    read(data, len);
-}
-
-void setVol(uint8_t vol){
-    char str[4] = "[v3]";
-    if(vol > 9){
-        vol = 9;
-    }
-    str[2] = 48 + vol;
-    speakElish(str);
-}
-
-void setSpeed(uint8_t speed){
-    char str[4] = "[s5]";
-    if (speed > 9) speed = 9;
-    str[2] = 48 + speed;
-    speakElish(str);
-}
-
-void setTone(uint8_t tone){
-    char str[4] = "[t5]";
-    if (tone > 9) tone = 9;
-    str[2] = 48 + tone;
-    speakElish(str);
-}
-
-void setEnglishPron(eENpron_t pron){
-    char* str = "[h2]";
-    if (pron == eAlphabet) {
-        str = "[h1]";
-    } else if (pron == eWord) {
-        str = "[h2]";
-    }
-    speakElish(str);
-}
-
-void speakElish(char* str){
-//    uint16_t point = 0;   
-    uint16_t len = 0;
-    while (str[len] != '\0') {
-        len++;
-    }
-    uint8_t unicode[len];
-    for (uint8_t i = 0; i < len; i++) {
-        unicode[i] = str[i] & 0x7F;
+    while(CLKCTRL.MCLKSTATUS & CLKCTRL_XOSC32KS_bm)
+    {
+        ; /* Wait until XOSC32KS becomes 0 */
     }
     
-    sendPack(START_SYNTHESIS1, unicode, len);
+    /* SEL = 0 (Use External Crystal): */
+    temp = CLKCTRL.XOSC32KCTRLA;
+    temp &= ~CLKCTRL_SEL_bm;
+    /* Writing to protected register */
+    ccp_write_io((void*)&CLKCTRL.XOSC32KCTRLA, temp);
     
-    //wait();)
-
-}
-
-void sendPack(uint8_t cmd, uint8_t* data, uint16_t len){
-    uint16_t length = 0;
-    uint8_t head[5] = { 0 };
-    head[0] = 0xfd;
-    switch (cmd) {
-  case START_SYNTHESIS: {
-    length = 2 + len;
-    head[1] = length >> 8;
-    head[2] = length & 0xff;
-    head[3] = START_SYNTHESIS;
-    head[4] = 0x03;
-    sendCommand(head, data, len);
-  } break;
-  case START_SYNTHESIS1: {
-    length = 2 + len;
-    head[1] = length >> 8;
-    head[2] = length & 0xff;
-    head[3] = START_SYNTHESIS;
-    head[4] = 0x04;
-    sendCommand(head, data, len);
-  }
-                       break;
-  default: {
-    length = 1;
-    head[1] = length >> 8;
-    head[2] = length & 0xff;
-    head[3] = cmd;
-    writeBytes(head, 4);
-  }
-         break;
-  }
-}
-
-void sendCommand(uint8_t* head, uint8_t* data, uint16_t length){
-//    uint16_t lenTemp = 0;
+    /* Enable oscillator: */
+    temp = CLKCTRL.XOSC32KCTRLA;
+    temp |= CLKCTRL_ENABLE_bm;
+    /* Writing to protected register */
+    ccp_write_io((void*)&CLKCTRL.XOSC32KCTRLA, temp);
     
-    startTWIw();
-    
-    write(head, 5);
-
-    write(data, length);
-    
-    TWI0.MCTRLB = TWI_MCMD_STOP_gc;
-}
-
-//read = 1, write = 0
-//void startTWI(){
-//    TWI0.MADDR = (addr << 1) | 1;
-//}
-
-void speak(char* word){
-    uint32_t uni = 0;
-    uint8_t utf8State = 0;
-    uint16_t point = 0;
-    uint16_t len = 0;
-    uint16_t _index = 0;
-    uint16_t _len = 0;
-    while (word[len] != '\0') {
-      len++;
+    /* Initialize RTC: */
+    while (RTC.STATUS > 0)
+    {
+        ; /* Wait for all register to be synchronized */
     }
-    gLength = len;
-    _len = len;
-    uint8_t _utf8[len];
-    for (uint32_t i = 0;i <= len;i++) {
-        _utf8[i] = word[i];
+
+    /* Set period */
+    RTC.PER = 32767;
+    RTC.CMP = 16383;
+
+    /* 32.768kHz External Crystal Oscillator (XOSC32K) */
+    RTC.CLKSEL = RTC_CLKSEL_INT32K_gc;
+
+    /* Run in debug: enabled */
+    RTC.DBGCTRL |= RTC_DBGRUN_bm;
+    
+    RTC.CTRLA = RTC_PRESCALER_DIV1_gc
+    | RTC_RTCEN_bm            /* Enable: enabled */
+    | RTC_RUNSTDBY_bm;        /* Run In Standby: enabled */
+    
+    /* Enable Overflow Interrupt */
+    RTC.INTCTRL |= RTC_OVF_bm;
+    //RTC.INTCTRL |= RTC_CMP_bm;
+}
+
+void update_score() {
+    char buf[5];
+    sprintf(buf, "%04d", score);
+    writeTWI_display((char *) &buf, 4);
+}
+
+int random_input(int current_input) {
+    int inputs[] = {BOP, PULL, TWIST};
+    if (current_input == INIT) {
+        return inputs[rand() % (2 + 1 - 0) + 0];
     }
-    word = "";
-    uint16_t len1 = getWordLen(_utf8);
-    uint8_t _unicode[len1];
-    while (_index < _len) {
-        if (_utf8[_index] >= 0xfc) {
-          utf8State = 5;
-          uni = _utf8[_index] & 1;
-          _index++;
-          for (uint8_t i = 1;i <= 5;i++) {
-            uni <<= 6;
-            uni |= (_utf8[_index] & 0x3f);
-            utf8State--;
-            _index++;
-          }
+    int shift = rand() % (2 + 1 - 1) + 1;
+    int new = inputs[(current_input + shift) % 3];
+    switch (new) {
+        case BOP:
+            sayBop();
+            break;
+        case PULL:
+            sayPull();
+            break;
+        case TWIST:
+            sayTwist();
+            break;
+        case SHAKE:
+            sayShake();
+            break;
+    }
+    return new;
+}
 
-        } else if (_utf8[_index] >= 0xf8) {
-          utf8State = 4;
-          uni = _utf8[_index] & 3;
-          _index++;
-          for (uint8_t i = 1;i <= 4;i++) {
-            uni <<= 6;
-            uni |= (_utf8[_index] & 0x03f);
-            utf8State--;
-            _index++;
-          }
-
-        } else if (_utf8[_index] >= 0xf0) {
-          utf8State = 3;
-          uni = _utf8[_index] & 7;
-          _index++;
-          for (uint8_t i = 1;i <= 3;i++) {
-            uni <<= 6;
-            uni |= (_utf8[_index] & 0x03f);
-            utf8State--;
-            _index++;
-          }
-
-        } else if (_utf8[_index] >= 0xe0) {
-          curState = eChinese;
-          if ((curState != lastState) && (lastState != eNone)) {
-            lanChange = true;
-          } else {
-            utf8State = 2;
-            uni = _utf8[_index] & 15;
-            _index++;
-            for (uint8_t i = 1;i <= 2;i++) {
-              uni <<= 6;
-              uni |= (_utf8[_index] & 0x03f);
-              utf8State--;
-              _index++;
+ISR(RTC_CNT_vect) {
+    if (RTC.INTFLAGS & RTC_OVF_bm) {
+        if (state == OVER) {
+            writeTWI_display((char *) "LOSE", 4);
+            delay++;
+            if (delay > 5) {
+                writeTWI_display((char *) "pLAY", 4);
+                delay = 0;
+                state = INIT;
             }
-            if (_utf8[_index] == 239) {
-              lanChange = true;
+        } else if (state == BOP || state == TWIST || state == PULL || state == SHAKE) {
+            if (delay > 5) {
+                delay = 0;
+                state = OVER;
+            } else {
+                delay++;
             }
-            lastState = eChinese;
-            _unicode[point++] = uni & 0xff;
-            _unicode[point++] = uni >> 8;
-            //if(point ==  24) lanChange = true;
-          }
-        } else if (_utf8[_index] >= 0xc0) {
-          curState = eChinese;
-          if ((curState != lastState) && (lastState != eNone)) {
-            lanChange = true;
-
-          } else {
-            utf8State = 1;
-            uni = _utf8[_index] & 0x1f;
-            _index++;
-            for (uint8_t i = 1;i <= 1;i++) {
-              uni <<= 6;
-              uni |= (_utf8[_index] & 0x03f);
-              utf8State--;
-              _index++;
-            }
-            lastState = eChinese;
-            _unicode[point++] = uni & 0xff;
-            _unicode[point++] = uni >> 8;
-            //if(point ==  24) lanChange = true;
-          }
-        } else if (_utf8[_index] <= 0x80) {
-          curState = eEnglish;
-          if ((curState != lastState) && (lastState != eNone)) {
-            lanChange = true;
-
-          } else {
-            _unicode[point++] = (_utf8[_index] & 0x7f);
-            _index++;
-            lastState = eEnglish;
-            if (/*(point ==  24) || */(_utf8[_index] == 0x20) || (_utf8[_index] == 0x2c)) lanChange = true;
-          }
         }
-        if (lanChange == true) {
-          if (lastState == eChinese) {
-            sendPack(START_SYNTHESIS, _unicode, point);
-            wait();
-          } else if (lastState == eEnglish) {
-            sendPack(START_SYNTHESIS1, _unicode, point);
-            wait();
-          }
-          lastState = eNone;
-          curState = eNone;
-          point = 0;
-          lanChange = false;
+        RTC.INTFLAGS &= RTC_OVF_bm;
+    }
+} 
+
+ISR(PORTA_PORT_vect) {
+    if (PORTA.INTFLAGS & twist.bit_map) {
+        if (state == TWIST) {
+            delay = 0;
+            score++;
+            update_score();
+            state = random_input(TWIST);
+        } else if (state == BOP || state == PULL || state == SHAKE) {
+            //state = OVER;
         }
+        PORTA.INTFLAGS &= twist.bit_map;
+    } else if (PORTA.INTFLAGS & bop.bit_map) {
+        if (state == INIT) {
+            score = 0;
+            update_score();
+            state = random_input(-1);
+        } else if (state == BOP) {
+            delay = 0;
+            score++;
+            update_score();
+            state = random_input(BOP);
+        } else if (state == TWIST || state == PULL || state == SHAKE) {
+            //state = OVER;
+        }
+        PORTA.INTFLAGS &= bop.bit_map;
+    } else if (PORTA.INTFLAGS & pull.bit_map) {
+        if (state == PULL) {
+            delay = 0;
+            score++;
+            update_score();
+            state = random_input(PULL);
+        } else if (state == TWIST || state == BOP || state == SHAKE) {
+            //state = OVER;
+        }
+        PORTA.INTFLAGS &= pull.bit_map;
     }
-
-    if (lastState == eChinese) {
-        sendPack(START_SYNTHESIS, _unicode, point);
-        wait();
-    } else if (lastState == eEnglish) {
-        PORTA.DIR |= PIN6_bm;
-        sendPack(START_SYNTHESIS1, _unicode, point);
-        wait();
-    }
-    lastState = eNone;
-    curState = eNone;
-    point = 0;
-    lanChange = false;
-
-    _index = 0;
-    _len = 0;
 }
-
-
-
-
-
-uint16_t getWordLen(uint8_t *_utf8){
-    uint16_t index = 0;
-//    uint32_t uni = 0;
-    uint16_t length = 0;
-    while (index < gLength) {
-    if (_utf8[index] >= 0xfc) {
-      index++;
-      for (uint8_t i = 1;i <= 5;i++) {
-        index++;
-      }
-      length += 4;
-    } else if (_utf8[index] >= 0xf8) {
-      index++;
-      for (uint8_t i = 1;i <= 4;i++) {
-        index++;
-      }
-      length += 3;
-    } else if (_utf8[index] >= 0xf0) {
-      index++;
-      for (uint8_t i = 1;i <= 3;i++) {
-        index++;
-      }
-      length += 3;
-    } else if (_utf8[index] >= 0xe0) {
-      index++;
-      for (uint8_t i = 1;i <= 2;i++) {
-        index++;
-      }
-      length += 2;
-    } else if (_utf8[index] >= 0xc0) {
-
-      index++;
-      for (uint8_t i = 1;i <= 1;i++) {
-        index++;
-      }
-      length += 2;
-    } else if (_utf8[index] <= 0x80) {
-      index++;
-      length++;
-    }
-  }
-  return length;
-}
-
-void setup() {
-  //Init speech synthesis sensor
-  begin();
-  //Set voice volume to 5
-  setVol(9);
-  //Set playback speed to 5
-  setSpeed(5);
-  //Set tone to 5
-  setTone(5);
-  //For English, speak word 
-  setEnglishPron(eWord);
-}
-
-void sayBop(){
-    begin();
-    speak("bop-it");
-    _delay_ms(100);
-}
-
-void sayTwist(){
-    begin();
-    speak("twist-it");
-    _delay_ms(100);
-}
-
-void sayPull(){
-    begin();
-    speak("pull-it");
-    _delay_ms(100);
-}
-
-void sayShake(){
-    begin();
-    speak("shake-it");
-    _delay_ms(100);
-}
-
-
 
 int main(void) {
     /* Replace with your application code */
     initTWI();
-    begin();
-    setSpeed(9);
-    sayBop();
-    sayTwist();
-    sayPull();
-    sayShake();
+    initInputs();
+    RTC_init();
+    writeTWI_display((char *) "pLAY", 4);
+    sei();
+//    int16_t accel[3];
+//    char str[5];
+    while (1) {
+//        readTWI_accel((uint8_t *) accel, 6);
+//        accel[0] >>= 4;
+//        accel[1] >>= 4;
+//        accel[2] >>= 4;
+//        if (abs(accel[0]) > 2000) {
+//            sprintf(str, "%04d", abs(accel[0]));
+//            writeTWI_display((char *)&str, 4);
+//        } else if (abs(accel[1]) > 2000) {
+//            sprintf(str, "%04d", abs(accel[1]));
+//            writeTWI_display((char *)&str, 4);
+//        } else if (abs(accel[2]) > 2000) {
+//            sprintf(str, "%04d", abs(accel[2]));
+//            writeTWI_display((char *)&str, 4);
+//        }
+//        //sprintf(str, "%04d", abs(accel[2]));
+//        //writeTWI_display((char *)&str, 4);
+//        _delay_ms(200);
+    }
 }
