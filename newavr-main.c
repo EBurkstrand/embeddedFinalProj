@@ -96,6 +96,19 @@ void USART2_PRINTF(char *str)
 //    USART2.TXDATAL = 0x45;
  }
 
+void USART2_PRINTF2(uint8_t data[])
+ {
+    uint8_t length = sizeof(data) / sizeof(data[0]);
+    
+    
+    for(size_t i = 0; i < length; i++)
+    {
+        while (!(USART2.STATUS & USART_DREIF_bm));      
+        USART2.TXDATAL = data[i];
+    }
+//    USART2.TXDATAL = 0x45;
+ }
+
 void initTWI() {
     // TODO Set up TWI Peripheral
 //    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
@@ -533,68 +546,39 @@ void setup() {
   setEnglishPron(eWord);
 }
 
+void sayBop(){
+    begin();
+    speak("bop-it");
+    _delay_ms(100);
+}
+
+void sayTwist(){
+    begin();
+    speak("twist-it");
+    _delay_ms(100);
+}
+
+void sayPull(){
+    begin();
+    speak("pull-it");
+    _delay_ms(100);
+}
+
+void sayShake(){
+    begin();
+    speak("shake-it");
+    _delay_ms(100);
+}
+
+
+
 int main(void) {
     /* Replace with your application code */
     initTWI();
-    USART2_INIT();
-    char* test = "test";
-    USART2_PRINTF(test);
-//    setup();
-//    speak("Hello World");
-//    while (1) {
-//        _delay_ms(10000);
-//        speak("Hello World");
-//    }
-    PORTA.DIR |= PIN5_bm;
-    
-//    wait();
-    
-//    PORTA.OUT |= PIN5_bm;
-//    startTWIw();
-//    uint8_t init_cmd = 0xAA;
-//    writeBytes(&init_cmd, 1);
     begin();
-    _delay_ms(1000);
-//    setEnglishPron(eWord);
-//    _delay_ms(1000);
-////    setTone(5);
-    speakElish("[m1]");
-    _delay_ms(2000);
-    speakElish("[v7]");
-    _delay_ms(1000);
-    speak("module");
-//    _delay_ms(2000);
-    wait();
-    speak("hello");
-//    _delay_ms(2000);
-    wait();
-//    _delay_ms(2000);
-    speak("bopit");
-//    wait();
-//    speak("twist-it");
-//    while (!(TWI0.MSTATUS & TWI_WIF_bm));
-//    speak("module");
-//    speak("module");
-//    speak("module");
-//    speak("module");
-//    speak("module");
-//    speak("module");
-
-    // Check for acknowledgment
-    
-    uint8_t ack = 0; 
-    ack = readACK();
-    
-    if (ack == EXPECTED_ACK_VALUE) {
-        // Indicate success (e.g., toggle an LED)
-        
-        PORTA.OUT |= PIN5_bm;
-        _delay_ms(2000);
-        PORTA.OUT &= ~PIN5_bm;
-        speak("hello");
-//        wait();
-    } else {
-        // Indicate failure
-    }
-    
+    setSpeed(9);
+    sayBop();
+    sayTwist();
+    sayPull();
+    sayShake();
 }
