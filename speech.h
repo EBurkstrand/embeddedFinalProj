@@ -50,11 +50,6 @@ typedef enum{
     eNone,
   } eState_t;
 
-volatile uint16_t gLength = 0;
-volatile eState_t curState = eNone;
-volatile eState_t lastState = eNone;
-volatile bool lanChange = false;
-
 uint16_t getWordLen(uint8_t *_utf8);
 void begin();
 void startTWIw();
@@ -73,6 +68,10 @@ void sendCommand(uint8_t* head, uint8_t* data, uint16_t length);
 void speak(char* word);
 uint16_t getWordLen(uint8_t *_utf8);
 void setup();
+void sayBop();
+void sayTwist();
+void sayPull();
+void sayShake();
 
 #define EXPECTED_ACK_VALUE 0x41
 
