@@ -1,5 +1,10 @@
 #include "SPEECH.h"
 
+volatile uint16_t gLength = 0;
+volatile eState_t curState = eNone;
+volatile eState_t lastState = eNone;
+volatile bool lanChange = false;
+
 void USART2_INIT(void)
 {
     /* Set TX pin as output and RX pin as input */
@@ -38,7 +43,7 @@ void USART2_PRINTF2(uint8_t data[])
 //    USART2.TXDATAL = 0x45;
  }
 
-void initTWI() {
+void initTWIbad() {
     // TODO Set up TWI Peripheral
 //    PORTA.DIRSET = PIN2_bm | PIN3_bm; //i/o
     PORTA.DIRSET = PIN2_bm | PIN3_bm;
